@@ -1,171 +1,108 @@
 /* *******************************************************************
    Pages for Webserver
 
-   sendPage()
-   - sends the requested page (incl. 404 error and JSON document)
-   - displays main page, renders title and left menu using <div> 
+   sendPage
+   - displays main page, renders title and left menu using tables
    - calls content functions depending on the number (i.e. URL) of the requested web page
    - also displays buttons for some of the pages
-   - in order to save flash memory, some HTML closing tags are omitted, new lines in HTML code are also omitted
 
-   contentInfo(), contentStatus(), contentIp(), contentTcp(), contentRtu()
+   menuItem
+   - returns menu item string depending on the the number (i.e. URL) of the requested web page
+
+   contentStatus, contentIp, contentTcp, contentRtu, contentTools
    - render the content of the requested page
 
-   contentWait()
-   - renders the "please wait" message instead of the content, will be forwarded to home page after 5 seconds
+   contentWait
+   - renders the "please wait" message instead of the content (= request page number 0xFF, will be forwarded to home page after 5 seconds)
 
-   tagInputNumber(), tagLabelDiv(), tagButton(), tagDivClose(), tagSpan()
-   - render snippets of repetitive HTML code for <input>, <label>, <div>, <button> and <span> tags
+   helperInput
+   - renders some repetitive HTML code for inputs
 
-   stringPageName(), stringStats()
-   - renders repetitive strings for menus, error counters
-
-   jsonVal()
-   - provide JSON value to a corresponding JSON key
+   send404, send204
+   - send error messages
 
    ***************************************************************** */
 
-const byte WEB_OUT_BUFFER_SIZE = 64;  // size of web server write buffer (used by StreamLib)
+const byte webOutBufferSize = 128;               // size of web server write buffer (used by StreamLib)
 
-void sendPage(EthernetClient &client, byte reqPage) {
-  char webOutBuffer[WEB_OUT_BUFFER_SIZE];
-  ChunkedPrint chunked(client, webOutBuffer, sizeof(webOutBuffer));  // the StreamLib object to replace client print
-  if (reqPage == PAGE_ERROR) {
-    chunked.print(F("HTTP/1.1 404 Not Found\r\n"
-                    "\r\n"
-                    "404 Not found"));
-    chunked.end();
-    return;
-  } else if (reqPage == PAGE_DATA) {
-    chunked.print(F("HTTP/1.1 200\r\n"
-                    "Content-Type: application/json\r\n"
-                    "Transfer-Encoding: chunked\r\n"
-                    "\r\n"));
-    chunked.begin();
-    chunked.print(F("{"));
-    for (byte i = 0; i < JSON_LAST; i++) {
-      if (i) chunked.print(F(","));
-      chunked.print(F("\""));
-      chunked.print(i);
-      chunked.print(F("\":\""));
-      jsonVal(chunked, i);
-      chunked.print(F("\""));
-    }
-    chunked.print(F("}"));
-    chunked.end();
-    return;
-  }
+void sendPage(WiFiClient &client, byte reqPage)
+{
+  char webOutBuffer[webOutBufferSize];
+  ChunkedPrint chunked(client, webOutBuffer, sizeof(webOutBuffer)); // the StreamLib object to replace client print
+  dbgln(F("[web out] 200 response send"));
   chunked.print(F("HTTP/1.1 200 OK\r\n"
+                  "Connection: close\r\n"
                   "Content-Type: text/html\r\n"
                   "Transfer-Encoding: chunked\r\n"
                   "\r\n"));
   chunked.begin();
-  chunked.print(F("<!DOCTYPE html>"
-                  "<html>"
+  chunked.print(F("<!doctype html>"            // the start of the HTTP Body - contains the HTML
+                  "<html lang=en>"
                   "<head>"
-                  "<meta"));
-  if (reqPage == PAGE_WAIT) {  // redirect to new IP and web port
-    chunked.print(F(" http-equiv=refresh content=5;url=http://"));
-    chunked.print(IPAddress(localConfig.ip));
+                  "<meta charset=utf-8"));
+  if (reqPage == PAGE_STATUS || reqPage == PAGE_WAIT) chunked.print(F(" http-equiv=refresh content=5"));
+  if (reqPage == PAGE_WAIT) {                                 // redirect to new IP and web port
+    chunked.print(F(";url=http://"));
+    chunked.print((IPAddress)WiFi.localIP());
     chunked.print(F(":"));
-    chunked.print(localConfig.webPort);
+    chunked.print(defaultConfig.webPort);
   }
   chunked.print(F(">"
                   "<title>Modbus RTU &rArr; Modbus TCP/UDP Gateway</title>"
                   "<style>"
-                  /*
-                  HTML Tags
-                    h1 - main title of the page
-                    h4 - text in navigation menu and header of page content
-                    a - items in left navigation menu
-                    label - first cell of a row in content
-                  CSS Classes
-                    w - wrapper (includes m + c)
-                    m  - navigation menu (left)
-                    c - content of a page
-                    r - row inside a content
-                    i - short input (byte or IP address octet)
-                    n - input type=number
-                    s - select input with numbers
-                    p - inputs disabled by id=o checkbox
-                  CSS Ids
-                    o - checkbox which disables other checkboxes and inputs
-                  */
-                  "body,.m{padding:1px;margin:0;font-family:sans-serif}"
-                  "h1,h4{padding:10px}"
-                  "h1,.m,h4{background:#0067AC;margin:1px}"
-                  ".m,.c{height:calc(100vh - 71px)}"
-                  ".m{min-width:20%}"
-                  ".c{flex-grow:1;overflow-y:auto}"
-                  ".w,.r{display:flex}"
-                  "a,h1,h4{color:white;text-decoration:none}"
-                  ".c h4{padding-left:30%;margin-bottom:20px}"
-                  ".r{margin:4px}"
-                  "label{width:30%;text-align:right;margin-right:2px}"
-                  "input,button,select{margin-top:-2px}"  // improve vertical allignment of input, button and select
-                  ".s{text-align:right}"
-                  ".s>option{direction:rtl}"
-                  ".i{text-align:center;width:3ch;color:black}"
-                  ".n{width:8ch}"
+                  "a {text-decoration:none;color:white}"
+                  "td:first-child {text-align:right;width:30%}"
+                  "th {text-align:left;background-color:#0067AC;color:white;padding:10px}"
+                  "table {width:100%}"
                   "</style>"
                   "</head>"
-                  "<body"));
-#ifdef ENABLE_DHCP
-  chunked.print(F(" onload=g(document.getElementById('o').checked)>"
-                  "<script>function g(h) {var x = document.getElementsByClassName('p');for (var i = 0; i < x.length; i++) {x[i].disabled = h}}</script"));
-#endif /* ENABLE_DHCP */
-  if (reqPage == PAGE_STATUS) {
-    chunked.print(F("><script>"
-                    "var a;"
-                    "const b=()=>{"
-                    "fetch('d.json')"  // Call the fetch function passing the url of the API as a parameter
-                    ".then(e=>{return e.json();a=0})"
-                    ".then(f=>{for(var i in f){if(document.getElementById(i))document.getElementById(i).innerHTML=f[i];}})"
-                    ".catch(()=>{if(!a){alert('Connnection lost');a=1}})"
-                    "};"
-                    "setInterval(()=>b(),"));
-    chunked.print(FETCH_INTERVAL);
-    chunked.print(F(");"
-                    "</script"));
-  }
+                  "<body style='font-family:sans-serif'"));
+//#ifdef ENABLE_DHCP
+//  chunked.print(F(" onload='dis(document.getElementById(&quot;box&quot;).checked)'>"
+//                  "<script>function dis(st) {var x = document.getElementsByClassName('ip');for (var i = 0; i < x.length; i++) {x[i].disabled = st}}</script"));
+//#endif /* ENABLE_DHCP */
   chunked.print(F(">"
-                  "<h1>Modbus RTU &rArr; Modbus TCP/UDP Gateway</h1>"
-                  "<div class=w>"
-                  "<div class=m>"));
+                  "<table height=100% style='position:absolute;top:0;bottom:0;left:0;right:0'>"
+                  "<tr style='height:10px'><th colspan=2>"
+                  "<h1 style='margin:0px'>Modbus RTU &rArr; Modbus TCP/UDP Gateway</h1>"  // first row is header
+                  "<tr>"                                           // second row is left menu (first cell) and main page (second cell)
+                  "<th valign=top style=width:20%;padding:0px>"
 
-  // Left Menu
-  for (byte i = 1; i <= PAGE_RTU; i++) {  // RTU Settings are the last item in the left menu
-    chunked.print(F("<h4 "));
+                  // Left Menu
+                  "<table>"));
+  for (byte i = 1; i < PAGE_WAIT; i++) {
+    chunked.print(F("<tr><th"));
     if ((i) == reqPage) {
       chunked.print(F(" style=background-color:#FF6600"));
     }
     chunked.print(F("><a href="));
     chunked.print(i);
     chunked.print(F(".htm>"));
-    stringPageName(chunked, i);
-    chunked.print(F("</a></h4>"));
+    menuItem(chunked, i);
+    chunked.print(F("</a>"));
   }
-  chunked.print(F("</div>"  // <div class=w>
-                  "<div class=c>"
-                  "<h4>"));
-  stringPageName(chunked, reqPage);
-  chunked.print(F("</h4>"
-                  "<form method=post>"));
+  chunked.print(F("</table><td valign=top style=padding:0px>"));
+
+  // Main Page
+  chunked.print(F("<form action=/"));
+  chunked.print(reqPage);
+  chunked.print(F(".htm method=post>"
+                  "<table style=border-collapse:collapse>"
+                  "<tr><th><th>"));
+  menuItem(chunked, reqPage);
+  chunked.print(F("<tr><td><br>"));
 
   //   PLACE FUNCTIONS PROVIDING CONTENT HERE
+  // content should start with new table row <tr>
 
   switch (reqPage) {
-    case PAGE_INFO:
-      contentInfo(chunked);
+    case PAGE_NONE:
       break;
     case PAGE_STATUS:
-      contentStatus(chunked);
+//      contentStatus(chunked);
       break;
     case PAGE_IP:
-
-#ifndef TEST_SOCKS
       contentIp(chunked);
-#endif
       break;
     case PAGE_TCP:
       contentTcp(chunked);
@@ -173,248 +110,366 @@ void sendPage(EthernetClient &client, byte reqPage) {
     case PAGE_RTU:
       contentRtu(chunked);
       break;
+    case PAGE_TOOLS:
+      contentTools(chunked);
+      break;
     case PAGE_WAIT:
       contentWait(chunked);
       break;
     default:
       break;
   }
-
   if (reqPage == PAGE_IP || reqPage == PAGE_TCP || reqPage == PAGE_RTU) {
-    chunked.print(F("<p><div class=r><label><input type=submit value='Save & Apply'></label><input type=reset value=Cancel></div>"));
+    chunked.print(F("<tr><td><br><input type=submit value='Save & Apply'><td><br><input type=reset value=Cancel>"));
   }
-  chunked.print(F("</form>"));
-  tagDivClose(chunked);  // close tags <div class=c> <div class=w>
-  chunked.end();         // closing tags not required </body></html>
+  chunked.print(F("</table></form>"
+                  "</table></body></html>"));
+  chunked.end();
 }
 
+// Menu item strings
+void menuItem(ChunkedPrint &chunked, byte item) {
+  switch (item) {
+    case PAGE_NONE:
+      break;
+    case PAGE_STATUS:
+      chunked.print(F("Current Status"));
+      break;
+    case PAGE_IP:
+      chunked.print(F("IP Settings"));
+      break;
+    case PAGE_TCP:
+      chunked.print(F("TCP/UDP Settings"));
+      break;
+    case PAGE_RTU:
+      chunked.print(F("RS485 Settings"));
+      break;
+    case PAGE_TOOLS:
+      chunked.print(F("Tools"));
+      break;
+    default:
+      break;
+  }
+}
 
-//        System Info
-void contentInfo(ChunkedPrint &chunked) {
-  tagLabelDiv(chunked, F("SW Version"));
-  chunked.print(VERSION[0]);
+//        Current Status
+void contentStatus(ChunkedPrint &chunked)
+{
+  chunked.print(F("<tr><td>SW Version:<td>"));
+  chunked.print(version[0], HEX);
   chunked.print(F("."));
-  chunked.print(VERSION[1]);
-  tagButton(chunked, F("Load Default Settings"), ACT_FACTORY);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Microcontroller"));
+  chunked.print(version[1], HEX);
+  chunked.print(F("<tr><td>Microcontroller:<td>"));
   chunked.print(BOARD);
-  tagButton(chunked, F("Reboot"), ACT_REBOOT);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("EEPROM Health"));
-  chunked.print(eepromWrites);
-  chunked.print(F(" Write Cycles"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Ethernet Chip"));
-  switch (W5100.getChip()) {
-    case 51:
-      chunked.print(F("W5100"));
-      break;
-    case 52:
-      chunked.print(F("W5200"));
-      break;
-    case 55:
-      chunked.print(F("W5500"));
-      break;
-    default:  // TODO: add W6100 once it is included in Ethernet library
-      chunked.print(F("Unknown"));
-      break;
-  }
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Ethernet Sockets"));
-  chunked.print(maxSockNum);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("MAC Address"));
-  byte macBuffer[6];
-  W5100.getMACAddress(macBuffer);
-  for (byte i = 0; i < 6; i++) {
-    chunked.print(hex(macBuffer[i]));
-    if (i < 5) chunked.print(F(":"));
-  }
-  tagButton(chunked, F("Generate New MAC"), ACT_MAC);
-  tagDivClose(chunked);
+//  chunked.print(F("<tr><td>Ethernet Chip:<td>"));
+//  switch (Ethernet.hardwareStatus()) {
+//    case EthernetW5100:
+//      chunked.print(F("W5100"));
+//      break;
+//    case EthernetW5200:
+//      chunked.print(F("W5200"));
+//      break;
+//    case EthernetW5500:
+//      chunked.print(F("W5500"));
+//      break;
+//    default:        // TODO: add W6100 once it is included in Ethernet library
+//      chunked.print(F("unknown"));
+//      break;
+//  }
+  chunked.print(F("<tr><td>Ethernet Sockets:<td>"));
+  chunked.print(maxSockNum, HEX);
+//  chunked.print(F("<tr><td>MAC Address:<td>"));
+//  byte macBuffer[6];
+//  Ethernet.MACAddress(macBuffer);
+//  for (byte i = 0; i < 6; i++) {
+//    if (macBuffer[i] < 16) chunked.print(F("0"));
+//    chunked.print(macBuffer[i], HEX);
+//    if (i < 5) chunked.print(F(":"));
+//  }
 
-#ifdef ENABLE_DHCP
-  tagLabelDiv(chunked, F("Auto IP"));
-  if (!localConfig.enableDhcp) {
-    chunked.print(F("DHCP disabled"));
-  } else if (dhcpSuccess == true) {
-    chunked.print(F("DHCP successful"));
-  } else {
-    chunked.print(F("DHCP failed, using fallback static IP"));
-  }
-  tagDivClose(chunked);
-#endif /* ENABLE_DHCP */
+//#ifdef ENABLE_DHCP
+//  chunked.print(F("<tr><td>Auto IP:<td>"));
+//  if (!defaultConfig.enableDhcp) {
+//    chunked.print(F("DHCP disabled"));
+//  } else if (dhcpSuccess == true) {
+//    chunked.print(F("DHCP successful"));
+//  } else {
+//    chunked.print(F("DHCP failed, using fallback static IP"));
+//  }
+//#endif /* ENABLE_DHCP */
 
-  tagLabelDiv(chunked, F("IP Address"));
-  chunked.print(IPAddress(Ethernet.localIP()));
-  tagDivClose(chunked);
-}
-
-//        Modbus Status
-void contentStatus(ChunkedPrint &chunked) {
+  chunked.print(F("<tr><td>IP Address:<td>"));
+  chunked.print(WiFi.localIP());
 
 #ifdef ENABLE_EXTRA_DIAG
-  tagLabelDiv(chunked, F("Run Time"));
-  tagSpan(chunked, JSON_TIME);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("RTU Data"));
-  tagSpan(chunked, JSON_RTU_DATA);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Ethernet Data"));
-  tagSpan(chunked, JSON_ETH_DATA);
-  tagDivClose(chunked);
+  chunked.print(F("<tr><td>Run Time:<td>"));
+  byte mod_seconds = byte((seconds) % 60);
+  byte mod_minutes = byte((seconds / 60) % 60);
+  byte mod_hours = byte((seconds / (60 * 60)) % 24);
+  int days = (seconds / (60U * 60U * 24));
+  chunked.print(days);
+  chunked.print(F(" days, "));
+  chunked.print(mod_hours);
+  chunked.print(F(" hours, "));
+  chunked.print(mod_minutes);
+  chunked.print(F(" mins, "));
+  chunked.print(mod_seconds);
+  chunked.print(F(" secs"));
 #endif /* ENABLE_EXTRA_DIAG */
 
-#ifdef TEST_SOCKS
-  tagSpan(chunked, JSON_SOCKETS);
-#endif
+  chunked.print(F("<tr><td>RS485 Data:<td>"));
+  chunked.print(serialTxCount);
+  chunked.print(F(" Tx bytes / "));
+  chunked.print(serialRxCount);
+  chunked.print(F(" Rx bytes"));
 
-  tagLabelDiv(chunked, F("Modbus RTU Request"));
-  for (byte i = 0; i <= POST_REQ_LAST - POST_REQ; i++) {
-    chunked.print(F("<input name="));
-    chunked.print((POST_REQ + i), HEX);
-    if (i == 0 || i == 1) {
-      chunked.print(F(" required"));  // first byte (slave address) and second byte (function code) are required
+#ifdef ENABLE_EXTRA_DIAG
+  chunked.print(F("<tr><td>Ethernet Data:<td>"));
+  chunked.print(ethTxCount);
+  chunked.print(F(" Tx bytes / "));
+  chunked.print(ethRxCount);
+  chunked.print(F(" Rx bytes  (excl. WebUI)"
+                  "<tr><td colspan=2>"
+                  "<table style=border-collapse:collapse;text-align:center>"
+                  "<tr><td><td>Socket Mode<td>Socket Status<td>Local Port<td>Remote IP<td>Remote Port"));
+//  for (byte i = 0; i < maxSockNum ; i++) {
+//    WiFiClient clientDiag = WiFiClient(i);
+//    chunked.print(F("<tr><td>Socket "));
+//    chunked.print(i);
+//    chunked.print(F(":<td>"));
+//    switch (W5100.readSnMR(i)) {
+//      case SnMR::CLOSE:
+//        chunked.print(F("CLOSE"));
+//        break;
+//      case SnMR::TCP:
+//        chunked.print(F("TCP"));
+//        break;
+//      case SnMR::UDP:
+//        chunked.print(F("UDP"));
+//        break;
+//      case SnMR::IPRAW:
+//        chunked.print(F("IPRAW"));
+//        break;
+//      case SnMR::MACRAW:
+//        chunked.print(F("MACRAW"));
+//        break;
+//      case SnMR::PPPOE:
+//        chunked.print(F("PPPOE"));
+//        break;
+//      case SnMR::ND:
+//        chunked.print(F("ND"));
+//        break;
+//      case SnMR::MULTI:
+//        chunked.print(F("MULTI"));
+//        break;
+//      default:
+//        break;
+//    }
+//    chunked.print(F("<td>"));
+//    switch (clientDiag.status()) {
+//      case SnSR::CLOSED:
+//        chunked.print(F("CLOSED"));
+//        break;
+//      case SnSR::INIT:
+//        chunked.print(F("INIT"));
+//        break;
+//      case SnSR::LISTEN:
+//        chunked.print(F("LISTEN"));
+//        break;
+//      case SnSR::SYNSENT:
+//        chunked.print(F("SYNSENT"));
+//        break;
+//      case SnSR::SYNRECV:
+//        chunked.print(F("SYNRECV"));
+//        break;
+//      case SnSR::ESTABLISHED:
+//        chunked.print(F("ESTABLISHED"));
+//        break;
+//      case SnSR::FIN_WAIT:
+//        chunked.print(F("FIN_WAIT"));
+//        break;
+//      case SnSR::CLOSING:
+//        chunked.print(F("CLOSING"));
+//        break;
+//      case SnSR::TIME_WAIT:
+//        chunked.print(F("TIME_WAIT"));
+//        break;
+//      case SnSR::CLOSE_WAIT:
+//        chunked.print(F("CLOSE_WAIT"));
+//        break;
+//      case SnSR::LAST_ACK:
+//        chunked.print(F("LAST_ACK"));
+//        break;
+//      case SnSR::UDP:
+//        chunked.print(F("UDP"));
+//        break;
+//      case SnSR::IPRAW:
+//        chunked.print(F("IPRAW"));
+//        break;
+//      case SnSR::MACRAW:
+//        chunked.print(F("MACRAW"));
+//        break;
+//      case SnSR::PPPOE:
+//        chunked.print(F("PPPOE"));
+//        break;
+//      default:
+//        break;
+//    }
+//    chunked.print(F("<td>"));
+//    chunked.print(clientDiag.localPort());
+//    chunked.print(F("<td>"));
+//    chunked.print(clientDiag.remoteIP());
+//    chunked.print(F("<td>"));
+//    chunked.print(clientDiag.remotePort());
+//  }
+  chunked.print(F("</table>"));
+#endif /* ENABLE_EXTRA_DIAG */
+
+//  chunked.print(F("<tr><td><br>"
+//                  "<tr><td>Modbus TCP/UDP Masters:"));
+//  byte countMasters = 0;
+//  for (byte i = 0; i < maxSockNum; i++) {
+//    WiFiClient clientDiag = WiFiClient(i);
+//    IPAddress ipTemp = clientDiag.remoteIP();
+//    if (ipTemp != 0 && ipTemp != 0xFFFFFFFF) {
+//      if (clientDiag.status() == SnSR::UDP && clientDiag.localPort() == defaultConfig.udpPort) {
+//        chunked.print(F("<td><tr><td>UDP:<td>"));
+//        chunked.print(ipTemp);
+//        countMasters++;
+//      } else if (clientDiag.localPort() == defaultConfig.tcpPort) {
+//        chunked.print(F("<td><tr><td>TCP:<td>"));
+//        chunked.print(ipTemp);
+//        countMasters++;
+//      }
+//    }
+//  }
+//  if (countMasters == 0) chunked.print(F("<td>none"));
+  chunked.print(F("<tr><td><br>"
+                  "<tr><td>Modbus RTU Slaves:<td><button name="));
+  chunked.print(POST_ACTION);
+  chunked.print(F(" value="));
+  chunked.print(SCAN);
+  chunked.print(F(">Scan</button>"));
+  byte countSlaves = 0;
+  for (int k = 1; k < maxSlaves; k++) {
+    if (getSlaveResponding(k) == true || k == scanCounter) {
+      chunked.print(F("<tr><td><td>0x"));
+      if (k < 16) chunked.print(F("0"));
+      chunked.print(k, HEX);
+      if (getSlaveResponding(k) == true) {
+        chunked.print(F(" OK"));
+        countSlaves++;
+      }
+      else chunked.print(F(" scanning..."));
     }
-    chunked.print(F(" minlength=2 maxlength=2 class=i pattern='[a-fA-F&bsol;d]+' value='"));
-    if (i < requestLen) {
-      chunked.print(hex(request[i]));
-    }
-    chunked.print(F("'>"));
   }
-  chunked.print(F("h (without CRC) <input type=submit value=Send>"));
-  tagButton(chunked, F("Clear"), ACT_CLEAR_REQUEST);
-  tagDivClose(chunked);
-  chunked.print(F("</form><form method=post>"));
-  tagLabelDiv(chunked, F("Modbus RTU Response"));
-  tagSpan(chunked, JSON_RESPONSE);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Requests Queue"));
-  tagSpan(chunked, JSON_QUEUE);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Modbus Statistics"));
-  tagButton(chunked, F("Reset Stats"), ACT_RESET_STATS);
-  tagSpan(chunked, JSON_STATS);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Modbus Masters"));
-  tagSpan(chunked, JSON_TCP_UDP_MASTERS);
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Modbus Slaves"));
-  tagButton(chunked, F("Scan Slaves"), ACT_SCAN);
-  tagSpan(chunked, JSON_SLAVES);
-  tagDivClose(chunked);
+  if (countSlaves == 0 && scanCounter == 0) chunked.print(F("<tr><td><td>none"));
 }
 
+
 //            IP Settings
-void contentIp(ChunkedPrint &chunked) {
-
+void contentIp(ChunkedPrint &chunked)
+{
 #ifdef ENABLE_DHCP
-  tagLabelDiv(chunked, F("Auto IP"));
-  chunked.print(F("<input type=hidden name="));
-  chunked.print(POST_DHCP, HEX);
+  chunked.print(F("<tr><td>Auto IP:"
+                  "<td><input type=hidden name="));
+  chunked.print(POST_DHCP);
   chunked.print(F(" value=0>"
-                  "<input type=checkbox id=o name="));
-  chunked.print(POST_DHCP, HEX);
-  chunked.print(F(" onclick=g(this.checked) value=1"));
-  if (localConfig.enableDhcp) chunked.print(F(" checked"));
+                  "<input type=checkbox id=box name="));
+  chunked.print(POST_DHCP);
+  chunked.print(F(" onclick=dis(this.checked) value=1"));
+  if (defaultConfig.enableDhcp) chunked.print(F(" checked"));
   chunked.print(F(">Enable DHCP"));
-  tagDivClose(chunked);
 #endif /* ENABLE_DHCP */
-
-  for (byte j = 0; j < 3; j++) {
-    switch (j) {
-      case 0:
-        tagLabelDiv(chunked, F("Static IP"));
-        break;
-      case 1:
-        tagLabelDiv(chunked, F("Submask"));
-        break;
-      case 2:
-        tagLabelDiv(chunked, F("Gateway"));
-        break;
-      default:
-        break;
-    }
-    for (byte i = 0; i < 4; i++) {
-      chunked.print(F("<input name="));
-      chunked.print(POST_IP + i + (j * 4), HEX);
-      chunked.print(F(" class='p i' required maxlength=3 pattern='^(&bsol;d{1,2}|1&bsol;d&bsol;d|2[0-4]&bsol;d|25[0-5])$' value="));
-      switch (j) {
-        case 0:
-          chunked.print(localConfig.ip[i]);
-          break;
-        case 1:
-          chunked.print(localConfig.subnet[i]);
-          break;
-        case 2:
-          chunked.print(localConfig.gateway[i]);
-          break;
-        default:
-          break;
-      }
-      chunked.print(F(">"));
-      if (i < 3) chunked.print(F("."));
-    }
-    tagDivClose(chunked);
-  }
-#ifdef ENABLE_DHCP
-  tagLabelDiv(chunked, F("DNS Server"));
-  for (byte i = 0; i < 4; i++) {
-    chunked.print(F("<input name="));
-    chunked.print(POST_DNS + i, HEX);
-    chunked.print(F(" class='p i' required maxlength=3 pattern='^(&bsol;d{1,2}|1&bsol;d&bsol;d|2[0-4]&bsol;d|25[0-5])$' value="));
-    chunked.print(localConfig.dns[i]);
-    chunked.print(F(">"));
-    if (i < 3) chunked.print(F("."));
-  }
-  tagDivClose(chunked);
-#endif /* ENABLE_DHCP */
+//  for (byte j = 0; j < 4; j++) {
+//    chunked.print(F("<tr><td>"));
+//    switch (j) {
+//      case 0:
+//        chunked.print(F("Static IP"));
+//        break;
+//      case 1:
+//        chunked.print(F("Submask"));
+//        break;
+//      case 2:
+//        chunked.print(F("Gateway"));
+//        break;
+//      case 3:
+//        chunked.print(F("DNS Server"));
+//        break;
+//      default:
+//        break;
+//    }
+//    chunked.print(F(":<td>"));
+//    for (byte i = 0; i < 4; i++) {
+//      chunked.print(F("<input name="));
+//      chunked.print(POST_IP + i + (j * 4));
+//      chunked.print(F(" type=tel class=ip required maxlength=3 size=3 pattern='^(&bsol;d{1,2}|1&bsol;d&bsol;d|2[0-4]&bsol;d|25[0-5])$' value="));
+//      switch (j) {
+//        case 0:
+//          chunked.print(defaultConfig.ip[i]);
+//          break;
+//        case 1:
+//          chunked.print(defaultConfig.subnet[i]);
+//          break;
+//        case 2:
+//          chunked.print(defaultConfig.gateway[i]);
+//          break;
+//        case 3:
+//          chunked.print(defaultConfig.dns[i]);
+//          break;
+//        default:
+//          break;
+//      }
+//      chunked.print(F(">"));
+//      if (i < 3) chunked.print(F("."));
+//    }
+//  }
 }
 
 //            TCP/UDP Settings
-void contentTcp(ChunkedPrint &chunked) {
+void contentTcp(ChunkedPrint &chunked)
+{
   for (byte i = 0; i < 3; i++) {
+    chunked.print(F("<tr><td>"));
     switch (i) {
       case 0:
-        tagLabelDiv(chunked, F("Modbus TCP Port"));
+        chunked.print(F("Modbus TCP"));
         break;
       case 1:
-        tagLabelDiv(chunked, F("Modbus UDP Port"));
+        chunked.print(F("Modbus UDP"));
         break;
       case 2:
-        tagLabelDiv(chunked, F("WebUI Port"));
+        chunked.print(F("Web"));
         break;
       default:
         break;
     }
-    tagInputNumber(chunked);
-    chunked.print(POST_TCP + i, HEX);
+    chunked.print(F(" Port:"));
+    helperInput(chunked);
+    chunked.print(POST_TCP + i);
     chunked.print(F(" min=1 max=65535 value="));
     switch (i) {
       case 0:
-        chunked.print(localConfig.tcpPort);
+        chunked.print(defaultConfig.tcpPort);
         break;
       case 1:
-        chunked.print(localConfig.udpPort);
+        chunked.print(defaultConfig.udpPort);
         break;
       case 2:
-        chunked.print(localConfig.webPort);
+        chunked.print(defaultConfig.webPort);
         break;
       default:
         break;
     }
     chunked.print(F(">"));
-    tagDivClose(chunked);
   }
-  tagLabelDiv(chunked, F("Modbus Mode"));
-  chunked.print(F("<select name="));
-  chunked.print(POST_RTU_OVER, HEX);
+  chunked.print(F("<tr><td>Modbus Mode:<td><select name="));
+  chunked.print(POST_RTU_OVER);
   chunked.print(F(">"));
   for (byte i = 0; i < 2; i++) {
     chunked.print(F("<option value="));
     chunked.print(i);
-    if (localConfig.enableRtuOverTcp == i) chunked.print(F(" selected"));
+    if (defaultConfig.enableRtuOverTcp == i) chunked.print(F(" selected"));
     chunked.print(F(">"));
     switch (i) {
       case 0:
@@ -429,55 +484,38 @@ void contentTcp(ChunkedPrint &chunked) {
     chunked.print(F("</option>"));
   }
   chunked.print(F("</select>"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Modbus TCP Idle Timeout"));
-  tagInputNumber(chunked);
-  chunked.print(POST_TCP_TIMEOUT, HEX);
-  chunked.print(F(" min=1 max=3600 value="));
-  chunked.print(localConfig.tcpTimeout);
-  chunked.print(F("> (1~3600) sec"));
-  tagDivClose(chunked);
 }
 
-//            RTU Settings
-void contentRtu(ChunkedPrint &chunked) {
-  tagLabelDiv(chunked, F("Baud Rate"));
-  chunked.print(F("<select class=s name="));
-  chunked.print(POST_BAUD, HEX);
-  chunked.print(F(">"));
-  for (byte i = 0; i < (sizeof(BAUD_RATES) / 2); i++) {
-    chunked.print(F("<option value="));
-    chunked.print(BAUD_RATES[i]);
-    if (localConfig.baud == BAUD_RATES[i]) chunked.print(F(" selected"));
-    chunked.print(F(">"));
-    chunked.print(BAUD_RATES[i]);
-    chunked.print(F("00</option>"));
-  }
-  chunked.print(F("</select> bps"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Data Bits"));
-  chunked.print(F("<select name="));
-  chunked.print(POST_DATA, HEX);
+//            RS485 Settings
+void contentRtu(ChunkedPrint &chunked)
+{
+  chunked.print(F("<tr><td>Baud Rate:"));
+  helperInput(chunked);
+  chunked.print(POST_BAUD);
+  chunked.print(F(" min=300 max=250000 value="));
+  chunked.print(defaultConfig.baud);
+  chunked.print(F("> (300~250000) bps"
+                  "<tr><td>Data Bits:<td><select name="));
+  chunked.print(POST_DATA);
   chunked.print(F(">"));
   for (byte i = 5; i <= 8; i++) {
     chunked.print(F("<option value="));
     chunked.print(i);
-    if ((((localConfig.serialConfig & 0x06) >> 1) + 5) == i) chunked.print(F(" selected"));
+    if ((((defaultConfig.serialConfig & 0x06) >> 1) + 5) == i) chunked.print(F(" selected"));
     chunked.print(F(">"));
     chunked.print(i);
     chunked.print(F("</option>"));
   }
-  chunked.print(F("</select> bit"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Parity"));
-  chunked.print(F("<select name="));
-  chunked.print(POST_PARITY, HEX);
+  chunked.print(F("</select> bit"
+                  "<tr><td>Parity:<td>"
+                  "<select name="));
+  chunked.print(POST_PARITY);
   chunked.print(F(">"));
   for (byte i = 0; i <= 3; i++) {
-    if (i == 1) continue;  // invalid value, skip and continue for loop
+    if (i == 1) continue;       // invalid value, skip and continue for loop
     chunked.print(F("<option value="));
     chunked.print(i);
-    if (((localConfig.serialConfig & 0x30) >> 4) == i) chunked.print(F(" selected"));
+    if (((defaultConfig.serialConfig & 0x30) >> 4) == i) chunked.print(F(" selected"));
     chunked.print(F(">"));
     switch (i) {
       case 0:
@@ -494,266 +532,79 @@ void contentRtu(ChunkedPrint &chunked) {
     }
     chunked.print(F("</option>"));
   }
-  chunked.print(F("</select>"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Stop Bits"));
-  chunked.print(F("<select name="));
-  chunked.print(POST_STOP, HEX);
+  chunked.print(F("</select>"
+                  "<tr><td>Stop Bits:<td><select name="));
+  chunked.print(POST_STOP);
   chunked.print(F(">"));
   for (byte i = 1; i <= 2; i++) {
     chunked.print(F("<option value="));
     chunked.print(i);
-    if ((((localConfig.serialConfig & 0x08) >> 3) + 1) == i) chunked.print(F(" selected"));
+    if ((((defaultConfig.serialConfig & 0x08) >> 3) + 1) == i) chunked.print(F(" selected"));
     chunked.print(F(">"));
     chunked.print(i);
     chunked.print(F("</option>"));
   }
-  chunked.print(F("</select> bit"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Inter-frame Delay"));
-  tagInputNumber(chunked);
-  chunked.print(POST_FRAMEDELAY, HEX);
-  chunked.print(F(" min="));
-  byte minFrameDelay = byte(frameDelay() / 1000UL) + 1;
-  chunked.print(minFrameDelay);
-  chunked.print(F(" max=250 value="));
-  chunked.print(localConfig.frameDelay);
-  chunked.print(F("> ("));
-  chunked.print(minFrameDelay);
-  chunked.print(F("~250) ms"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Response Timeout"));
-  tagInputNumber(chunked);
-  chunked.print(POST_TIMEOUT, HEX);
-  chunked.print(F(" min=50 max=5000 value="));
-  chunked.print(localConfig.serialTimeout);
-  chunked.print(F("> (50~5000) ms"));
-  tagDivClose(chunked);
-  tagLabelDiv(chunked, F("Attempts"));
-  tagInputNumber(chunked);
-  chunked.print(POST_ATTEMPTS, HEX);
-  chunked.print(F(" min=1 max=5 value="));
-  chunked.print(localConfig.serialAttempts);
-  chunked.print(F("> (1~5)"));
-  tagDivClose(chunked);
+  chunked.print(F("</select> bit"
+                  "<tr><td>Response Timeout:"));
+  helperInput(chunked);
+  chunked.print(POST_TIMEOUT);
+  chunked.print(F(" min=100 max=9999 value="));
+  chunked.print(defaultConfig.serialTimeout);
+  chunked.print(F("> (100~9999) ms"
+                  "<tr><td>Retry Attempts:"));
+  helperInput(chunked);
+  chunked.print(POST_RETRY);
+  chunked.print(F(" min=1 max=10 value="));
+  chunked.print(defaultConfig.serialRetry);
+  chunked.print(F("> (1~10)"));
 }
 
+//        Tools
+void contentTools(ChunkedPrint &chunked)
+{
+//  chunked.print(F("<tr><td>Factory Defaults:<td><button name="));
+//  chunked.print(POST_ACTION);
+//  chunked.print(F(" value="));
+//  chunked.print(FACTORY);
+//  chunked.print(F(">Restore</button> (Static IP: "));
+//  chunked.print((IPAddress)defaultConfig.ip);
+//  chunked.print(F(")"
+//                  "<tr><td>MAC Address: <td><button name="));
+//  chunked.print(POST_ACTION);
+//  chunked.print(F(" value="));
+//  chunked.print(MAC);
+//  chunked.print(F(">Generate New</button>"
+//                  "<tr><td>Microcontroller: <td><button name="));
+  chunked.print(F("<tr><td>Microcontroller: <td><button name="));
+  chunked.print(POST_ACTION);
+  chunked.print(F(" value="));
+  chunked.print(REBOOT);
+  chunked.print(F(">Reboot</button>"));
+}
 
-void contentWait(ChunkedPrint &chunked) {
-  chunked.print(F("Reloading. Please wait..."));
+void contentWait(ChunkedPrint &chunked)
+{
+  chunked.print(F("<tr><td><td><br>Reloading. Please wait..."));
 }
 
 // Functions providing snippets of repetitive HTML code
-void tagInputNumber(ChunkedPrint &chunked) {
-  chunked.print(F("<input class='s n' required type=number name="));
+void helperInput(ChunkedPrint &chunked)
+{
+  chunked.print(F("<td><input size=7 required type=number name="));
 }
 
-void tagLabelDiv(ChunkedPrint &chunked, const __FlashStringHelper *flashString) {
-  chunked.print(F("<div class=r>"
-                  "<label>"));
-  chunked.print(flashString);
-  chunked.print(F(":</label>"
-                  "<div>"));
+void send404(WiFiClient &client)
+{
+  dbgln(F("[web out] response 404 file not found"));
+  client.println(F("HTTP/1.1 404 Not Found\r\n"
+                   "Content-Length: 0"));
+  client.stop();
 }
 
-void tagButton(ChunkedPrint &chunked, const __FlashStringHelper *flashString, byte action) {
-  chunked.print(F(" <button name="));
-  chunked.print(POST_ACTION, HEX);
-  chunked.print(F(" value="));
-  chunked.print(action);
-  chunked.print(F(">"));
-  chunked.print(flashString);
-  chunked.print(F("</button><br>"));
-}
 
-void tagDivClose(ChunkedPrint &chunked) {
-  chunked.print(F("</div>"
-                  "</div>"));  // <div class=r>
-}
-
-void tagSpan(ChunkedPrint &chunked, const byte JSONKEY) {
-  chunked.print(F("<span id="));
-  chunked.print(JSONKEY);
-  chunked.print(F(">"));
-  jsonVal(chunked, JSONKEY);
-  chunked.print(F("</span>"));
-}
-
-// Menu item strings
-void stringPageName(ChunkedPrint &chunked, byte item) {
-  switch (item) {
-    case PAGE_INFO:
-      chunked.print(F("System Info"));
-      break;
-    case PAGE_STATUS:
-      chunked.print(F("Modbus Status"));
-      break;
-    case PAGE_IP:
-      chunked.print(F("IP Settings"));
-      break;
-    case PAGE_TCP:
-      chunked.print(F("TCP/UDP Settings"));
-      break;
-    case PAGE_RTU:
-      chunked.print(F("RTU Settings"));
-      break;
-    default:
-      break;
-  }
-}
-
-void stringStats(ChunkedPrint &chunked, const byte stat) {
-  switch (stat) {
-    case SLAVE_OK:
-      chunked.print(F(" Slave Responded"));
-      break;
-    case SLAVE_ERROR_0X:
-      chunked.print(F(" Slave Responded with Error (Codes 1~8)"));
-      break;
-    case SLAVE_ERROR_0A:
-      chunked.print(F(" Gateway Overloaded (Code 10)"));
-      break;
-    case SLAVE_ERROR_0B:
-    case SLAVE_ERROR_0B_QUEUE:
-      chunked.print(F(" Slave Failed to Respond (Code 11)"));
-      break;
-    case ERROR_TIMEOUT:
-      chunked.print(F(" Response Timeout"));
-      break;
-    case ERROR_RTU:
-      chunked.print(F(" Invalid RTU Response"));
-      break;
-    case ERROR_TCP:
-      chunked.print(F(" Invalid TCP/UDP Request"));
-      break;
-    default:
-      break;
-  }
-  chunked.print(F("<br>"));
-}
-
-void jsonVal(ChunkedPrint &chunked, const byte JSONKEY) {
-  switch (JSONKEY) {
-#ifdef ENABLE_EXTRA_DIAG
-    case JSON_TIME:
-      chunked.print(seconds / (3600UL * 24L));
-      chunked.print(F(" days, "));
-      chunked.print((seconds / 3600UL) % 24L);
-      chunked.print(F(" hours, "));
-      chunked.print((seconds / 60UL) % 60L);
-      chunked.print(F(" mins, "));
-      chunked.print((seconds) % 60L);
-      chunked.print(F(" secs"));
-      break;
-    case JSON_RTU_DATA:
-      for (byte i = 0; i < DATA_LAST; i++) {
-        chunked.print(rtuCount[i]);
-        switch (i) {
-          case DATA_TX:
-            chunked.print(F(" Tx bytes / "));
-            break;
-          case DATA_RX:
-            chunked.print(F(" Rx bytes"));
-            break;
-        }
-      }
-    case JSON_ETH_DATA:
-      for (byte i = 0; i < DATA_LAST; i++) {
-        chunked.print(ethCount[i]);
-        switch (i) {
-          case DATA_TX:
-            chunked.print(F(" Tx bytes / "));
-            break;
-          case DATA_RX:
-            chunked.print(F(" Rx bytes (excl. WebUI)"));
-            break;
-        }
-      }
-      break;
-#endif /* ENABLE_EXTRA_DIAG */
-#ifdef TEST_SOCKS
-    case JSON_SOCKETS:
-      for (byte s = 0; s < maxSockNum; s++) {
-        chunked.print(W5100.readSnPORT(s));
-        chunked.print(F(" "));
-        chunked.print(hex(W5100.readSnSR(s)));
-        chunked.print(F(" "));
-        chunked.print(millis() - lastSocketUse[s]);
-        chunked.print(F("<br>"));
-      }
-      break;
-#endif
-    case JSON_RESPONSE:
-      {
-        for (byte i = 0; i < MAX_RESPONSE_LEN; i++) {
-          chunked.print(F("<input value='"));
-          if (i < responseLen) {
-            chunked.print(hex(response[i]));
-          }
-          chunked.print(F("' disabled class=i>"));
-        }
-        chunked.print(F("h"));
-        if (responseLen > MAX_RESPONSE_LEN) {
-          chunked.print(F(" +"));
-          chunked.print(byte(responseLen - MAX_RESPONSE_LEN));
-          chunked.print(F(" bytes"));
-        }
-      }
-      break;
-    case JSON_QUEUE:
-      chunked.print(queueDataSize);
-      chunked.print(F(" / "));
-      chunked.print(MAX_QUEUE_DATA);
-      chunked.print(F(" bytes<br>"));
-      chunked.print(queueHeadersSize);
-      chunked.print(F(" / "));
-      chunked.print(MAX_QUEUE_REQUESTS);
-      chunked.print(F(" requests"));
-      queueDataSize = queueData.size();
-      queueHeadersSize = queueHeaders.size();
-      break;
-    case JSON_STATS:
-      for (byte i = 0; i < ERROR_LAST; i++) {
-        if (i == SLAVE_ERROR_0B_QUEUE) continue;  // there is no counter for SLAVE_ERROR_0B_QUEUE
-        chunked.print(errorCount[i]);
-        stringStats(chunked, i);
-      }
-      break;
-    case JSON_TCP_UDP_MASTERS:
-      {
-        for (byte s = 0; s < maxSockNum; s++) {
-          byte remoteIParray[4];
-          W5100.readSnDIPR(s, remoteIParray);
-          if (remoteIParray[0] != 0) {
-            if (W5100.readSnSR(s) == SnSR::UDP) {
-              chunked.print(IPAddress(remoteIParray));
-              chunked.print(F(" UDP<br>"));
-            } else if (W5100.readSnSR(s) == SnSR::ESTABLISHED && W5100.readSnPORT(s) == localConfig.tcpPort) {
-              chunked.print(IPAddress(remoteIParray));
-              chunked.print(F(" TCP<br>"));
-            }
-          }
-        }
-      }
-      break;
-    case JSON_SLAVES:
-      {
-        for (byte k = 1; k < MAX_SLAVES; k++) {
-          for (byte s = 0; s <= SLAVE_ERROR_0B_QUEUE; s++) {
-            if (getSlaveStatus(k, s) == true || k == scanCounter) {
-              chunked.print(hex(k));
-              chunked.print(F("h"));
-              if (k == scanCounter) {
-                chunked.print(F(" Scanning...<br>"));
-                break;
-              }
-              stringStats(chunked, s);
-            }
-          }
-        }
-      }
-      break;
-    default:
-      break;
-  }
+void send204(WiFiClient &client)
+{
+  dbgln(F("[web out] response 204 no content"));
+  client.println(F("HTTP/1.1 204 No content"));
+  client.stop();
 }
